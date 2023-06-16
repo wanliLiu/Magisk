@@ -44,6 +44,7 @@ open class App() : Application() {
     }
 
     override fun attachBaseContext(context: Context) {
+        System.setProperty("LIBSU_VERBOSE_LOGGING", "enable")
         // Get the actual ContextImpl
         val app: Application
         val base: Context

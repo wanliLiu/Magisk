@@ -4,10 +4,12 @@ use std::fmt::{Arguments, Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
 use std::str::Utf8Error;
-use std::{fmt, io, slice, str};
+use std::{fmt, io, mem, slice, str};
 
 use libc::c_char;
 use thiserror::Error;
+
+use crate::ffi;
 
 pub fn copy_str<T: AsRef<[u8]>>(dest: &mut [u8], src: T) -> usize {
     let src = src.as_ref();
@@ -24,18 +26,18 @@ pub fn copy_cstr<T: AsRef<CStr> + ?Sized>(dest: &mut [u8], src: &T) -> usize {
     len - 1
 }
 
-struct BufFmtWriter<'a> {
+pub struct BufFormatter<'a> {
     buf: &'a mut [u8],
-    used: usize,
+    pub used: usize,
 }
 
-impl<'a> BufFmtWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        BufFmtWriter { buf, used: 0 }
+impl<'a> BufFormatter<'a> {
+    pub fn new(buf: &'a mut [u8]) -> Self {
+        BufFormatter { buf, used: 0 }
     }
 }
 
-impl<'a> fmt::Write for BufFmtWriter<'a> {
+impl<'a> fmt::Write for BufFormatter<'a> {
     // The buffer should always be null terminated
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.used >= self.buf.len() - 1 {
@@ -49,7 +51,7 @@ impl<'a> fmt::Write for BufFmtWriter<'a> {
 }
 
 pub fn fmt_to_buf(buf: &mut [u8], args: Arguments) -> usize {
-    let mut w = BufFmtWriter::new(buf);
+    let mut w = BufFormatter::new(buf);
     if let Ok(()) = fmt::write(&mut w, args) {
         w.used
     } else {
@@ -139,7 +141,7 @@ impl Utf8CStr {
 
     #[inline]
     pub unsafe fn from_bytes_unchecked(buf: &[u8]) -> &Utf8CStr {
-        &*(buf as *const [u8] as *const Utf8CStr)
+        mem::transmute(buf)
     }
 
     pub unsafe fn from_ptr<'a>(ptr: *const c_char) -> Result<&'a Utf8CStr, StrErr> {
@@ -167,7 +169,8 @@ impl Utf8CStr {
 
     #[inline]
     pub fn as_cstr(&self) -> &CStr {
-        self.as_ref()
+        // SAFETY: Already validated as null terminated during construction
+        unsafe { CStr::from_bytes_with_nul_unchecked(&self.inner) }
     }
 }
 
@@ -176,7 +179,8 @@ impl Deref for Utf8CStr {
 
     #[inline]
     fn deref(&self) -> &str {
-        self.as_ref()
+        // SAFETY: Already UTF-8 validated during construction
+        unsafe { str::from_utf8_unchecked(self.as_bytes()) }
     }
 }
 
@@ -197,16 +201,14 @@ impl Debug for Utf8CStr {
 impl AsRef<CStr> for Utf8CStr {
     #[inline]
     fn as_ref(&self) -> &CStr {
-        // SAFETY: Already validated as null terminated during construction
-        unsafe { CStr::from_bytes_with_nul_unchecked(&self.inner) }
+        self.as_cstr()
     }
 }
 
 impl AsRef<str> for Utf8CStr {
     #[inline]
     fn as_ref(&self) -> &str {
-        // SAFETY: Already UTF-8 validated during construction
-        unsafe { str::from_utf8_unchecked(self.as_bytes()) }
+        self.deref()
     }
 }
 
@@ -288,58 +290,82 @@ pub unsafe fn slice_from_ptr_mut<'a, T>(buf: *mut T, len: usize) -> &'a mut [T] 
     }
 }
 
-pub trait FlatData {
-    fn as_raw_bytes(&self) -> &[u8]
-    where
-        Self: Sized,
-    {
+pub trait FlatData
+where
+    Self: Sized,
+{
+    fn as_raw_bytes(&self) -> &[u8] {
         unsafe {
             let self_ptr = self as *const Self as *const u8;
             slice::from_raw_parts(self_ptr, std::mem::size_of::<Self>())
         }
     }
-    fn as_raw_bytes_mut(&mut self) -> &mut [u8]
-    where
-        Self: Sized,
-    {
+    fn as_raw_bytes_mut(&mut self) -> &mut [u8] {
         unsafe {
             let self_ptr = self as *mut Self as *mut u8;
             slice::from_raw_parts_mut(self_ptr, std::mem::size_of::<Self>())
         }
     }
+
+    fn bytes_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
 }
 
-// Check libc return value and map errors to Result
-pub trait LibcReturn: Copy {
+macro_rules! impl_flat_data {
+    ($($t:ty)*) => ($(impl FlatData for $t {})*)
+}
+
+impl_flat_data!(usize u8 u16 u32 u64 isize i8 i16 i32 i64);
+
+// Check libc return value and map to Result
+pub trait LibcReturn
+where
+    Self: Copy,
+{
     fn is_error(&self) -> bool;
     fn check_os_err(self) -> io::Result<Self> {
         if self.is_error() {
-            return Err(io::Error::last_os_error());
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(self)
         }
-        Ok(self)
     }
 }
 
-impl LibcReturn for i32 {
-    fn is_error(&self) -> bool {
-        *self < 0
-    }
+macro_rules! impl_libc_return {
+    ($($t:ty)*) => ($(
+        impl LibcReturn for $t {
+            #[inline]
+            fn is_error(&self) -> bool {
+                *self < 0
+            }
+        }
+    )*)
 }
 
-impl LibcReturn for isize {
-    fn is_error(&self) -> bool {
-        *self < 0
-    }
-}
+impl_libc_return! { i8 i16 i32 i64 isize }
 
 impl<T> LibcReturn for *const T {
+    #[inline]
     fn is_error(&self) -> bool {
         self.is_null()
     }
 }
 
 impl<T> LibcReturn for *mut T {
+    #[inline]
     fn is_error(&self) -> bool {
         self.is_null()
+    }
+}
+
+pub trait MutBytesExt {
+    fn patch(&mut self, from: &[u8], to: &[u8]) -> Vec<usize>;
+}
+
+impl<T: AsMut<[u8]>> MutBytesExt for T {
+    fn patch(&mut self, from: &[u8], to: &[u8]) -> Vec<usize> {
+        ffi::mut_u8_patch(self.as_mut(), from, to)
     }
 }

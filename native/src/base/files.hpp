@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include <linux/fs.h>
 #include "misc.hpp"
 
 template <typename T>
@@ -42,6 +43,8 @@ struct mount_info {
 };
 
 struct mmap_data : public byte_data {
+    static_assert((sizeof(void *) == 8 && BLKGETSIZE64 == 0x80081272) ||
+                  (sizeof(void *) == 4 && BLKGETSIZE64 == 0x80041272));
     ALLOW_MOVE_ONLY(mmap_data)
 
     explicit mmap_data(const char *name, bool rw = false);
@@ -58,7 +61,6 @@ bool frm_rf(int dirfd);
 
 } // extern "C"
 
-using rust::fd_path;
 int fd_pathat(int dirfd, const char *name, char *path, size_t size);
 void mv_path(const char *src, const char *dest);
 void mv_dir(int src, int dest);

@@ -11,8 +11,13 @@ import androidx.core.os.postDelayed
 import com.topjohnwu.magisk.BuildConfig
 import com.topjohnwu.magisk.R
 import com.topjohnwu.magisk.StubApk
-import com.topjohnwu.magisk.core.*
+import com.topjohnwu.magisk.core.AppApkPath
+import com.topjohnwu.magisk.core.Config
+import com.topjohnwu.magisk.core.Const
+import com.topjohnwu.magisk.core.Info
 import com.topjohnwu.magisk.core.di.ServiceLocator
+import com.topjohnwu.magisk.core.isRunningAsStub
+import com.topjohnwu.magisk.core.ktx.copyAndClose
 import com.topjohnwu.magisk.core.ktx.reboot
 import com.topjohnwu.magisk.core.ktx.toast
 import com.topjohnwu.magisk.core.ktx.withStreams
@@ -115,7 +120,9 @@ abstract class MagiskInstallImpl protected constructor(
                     val name = n.substring(3, n.length - 3)
                     val dest = File(installDir, name)
                     zf.getInputStream(it).writeTo(dest)
+                    dest.setExecutable(true)
                 }
+                zf.close()
             } else {
                 val info = context.applicationInfo
                 var libs = File(info.nativeLibraryDir).listFiles { _, name ->
@@ -169,7 +176,7 @@ abstract class MagiskInstallImpl protected constructor(
         return true
     }
 
-    private fun InputStream.copyAndClose(out: OutputStream) = out.use { copyTo(it) }
+    private fun InputStream.copyAndCloseOut(out: OutputStream) = out.use { copyTo(it) }
 
     private fun newTarEntry(name: String, size: Long): TarEntry {
         console.add("-- Writing: $name")
@@ -200,7 +207,7 @@ abstract class MagiskInstallImpl protected constructor(
                 console.add("-- Extracting: $name")
 
                 val extract = installDir.getChildFile(name)
-                decompressedStream().copyAndClose(extract.newOutputStream())
+                decompressedStream().copyAndCloseOut(extract.newOutputStream())
             } else if (entry.name.contains("vbmeta.img")) {
                 val rawData = decompressedStream().readBytes()
                 // Valid vbmeta.img should be at least 256 bytes
@@ -270,12 +277,12 @@ abstract class MagiskInstallImpl protected constructor(
                 }
                 "init_boot.img" -> {
                     console.add("- Extracting init_boot.img")
-                    zipIn.copyAndClose(initBoot.newOutputStream())
+                    zipIn.copyAndCloseOut(initBoot.newOutputStream())
                     return initBoot
                 }
                 "boot.img" -> {
                     console.add("- Extracting boot.img")
-                    zipIn.copyAndClose(boot.newOutputStream())
+                    zipIn.copyAndCloseOut(boot.newOutputStream())
                     // Don't return here since there might be an init_boot.img
                 }
             }
@@ -404,7 +411,7 @@ abstract class MagiskInstallImpl protected constructor(
                         } else {
                             console.add("- Copying image to cache")
                             installDir.getChildFile("boot.img").also {
-                                src.copyAndClose(it.newOutputStream())
+                                src.copyAndCloseOut(it.newOutputStream())
                             }
                         }
                     } catch (e: IOException) {

@@ -14,7 +14,6 @@ LOCAL_STATIC_LIBRARIES := \
     libsystemproperties \
     libphmap \
     liblsplt \
-    libmincrypt \
     libmagisk-rs
 
 LOCAL_SRC_FILES := \
@@ -99,7 +98,6 @@ LOCAL_MODULE := magiskboot
 LOCAL_STATIC_LIBRARIES := \
     libbase \
     libcompat \
-    libmincrypt \
     liblzma \
     liblz4 \
     libbz2 \
@@ -111,11 +109,9 @@ LOCAL_STATIC_LIBRARIES := \
 LOCAL_SRC_FILES := \
     boot/main.cpp \
     boot/bootimg.cpp \
-    boot/hexpatch.cpp \
     boot/compress.cpp \
     boot/format.cpp \
     boot/dtb.cpp \
-    boot/pattern.cpp \
     boot/boot-rs.cpp
 
 include $(BUILD_EXECUTABLE)

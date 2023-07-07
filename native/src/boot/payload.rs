@@ -1,26 +1,28 @@
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 
-use anyhow::{anyhow, Context};
 use byteorder::{BigEndian, ReadBytesExt};
-use protobuf::{EnumFull, Message};
+use quick_protobuf::{BytesReader, MessageRead};
 
 use base::libc::c_char;
-use base::{ReadSeekExt, StrErr, Utf8CStr};
+use base::{error, LoggedError, LoggedResult, ReadSeekExt, StrErr, Utf8CStr};
 use base::{ResultExt, WriteExt};
 
 use crate::ffi;
-use crate::update_metadata::install_operation::Type;
-use crate::update_metadata::DeltaArchiveManifest;
+use crate::proto::update_metadata::mod_InstallOperation::Type;
+use crate::proto::update_metadata::DeltaArchiveManifest;
 
 macro_rules! bad_payload {
-    ($msg:literal) => {
-        anyhow!(concat!("invalid payload: ", $msg))
-    };
-    ($($args:tt)*) => {
-        anyhow!("invalid payload: {}", format_args!($($args)*))
-    };
+    ($msg:literal) => {{
+        error!(concat!("Invalid payload: ", $msg));
+        LoggedError::default()
+    }};
+    ($($args:tt)*) => {{
+        error!("Invalid payload: {}", format_args!($($args)*));
+        LoggedError::default()
+    }};
 }
 
 const PAYLOAD_MAGIC: &str = "CrAU";
@@ -29,11 +31,11 @@ fn do_extract_boot_from_payload(
     in_path: &Utf8CStr,
     partition_name: Option<&Utf8CStr>,
     out_path: Option<&Utf8CStr>,
-) -> anyhow::Result<()> {
+) -> LoggedResult<()> {
     let mut reader = BufReader::new(if in_path == "-" {
         unsafe { File::from_raw_fd(0) }
     } else {
-        File::open(in_path).with_context(|| format!("cannot open '{in_path}'"))?
+        File::open(in_path).log_with_msg(|w| write!(w, "Cannot open '{}'", in_path))?
     });
 
     let buf = &mut [0u8; 4];
@@ -64,49 +66,50 @@ fn do_extract_boot_from_payload(
     let manifest = {
         let manifest = &mut buf[..manifest_len];
         reader.read_exact(manifest)?;
-        DeltaArchiveManifest::parse_from_bytes(manifest)?
+        let mut br = BytesReader::from_bytes(manifest);
+        DeltaArchiveManifest::from_reader(&mut br, manifest)?
     };
-    if !manifest.has_minor_version() || manifest.minor_version() != 0 {
+    if manifest.get_minor_version() != 0 {
         return Err(bad_payload!(
             "delta payloads are not supported, please use a full payload file"
         ));
     }
 
-    let block_size = manifest.block_size() as u64;
+    let block_size = manifest.get_block_size() as u64;
 
     let partition = match partition_name {
         None => {
             let boot = manifest
                 .partitions
                 .iter()
-                .find(|p| p.partition_name() == "init_boot");
+                .find(|p| p.partition_name == "init_boot");
             let boot = match boot {
                 Some(boot) => Some(boot),
                 None => manifest
                     .partitions
                     .iter()
-                    .find(|p| p.partition_name() == "boot"),
+                    .find(|p| p.partition_name == "boot"),
             };
-            boot.ok_or(anyhow!("boot partition not found"))?
+            boot.ok_or_else(|| bad_payload!("boot partition not found"))?
         }
         Some(name) => manifest
             .partitions
             .iter()
-            .find(|p| p.partition_name() == name)
-            .ok_or(anyhow!("partition '{name}' not found"))?,
+            .find(|p| p.partition_name.as_str() == name)
+            .ok_or_else(|| bad_payload!("partition '{}' not found", name))?,
     };
 
     let out_str: String;
     let out_path = match out_path {
         None => {
-            out_str = format!("{}.img", partition.partition_name());
+            out_str = format!("{}.img", partition.partition_name);
             out_str.as_str()
         }
         Some(s) => s,
     };
 
     let mut out_file =
-        File::create(out_path).with_context(|| format!("cannot write to '{out_path}'"))?;
+        File::create(out_path).log_with_msg(|w| write!(w, "Cannot write to '{}'", out_path))?;
 
     // Skip the manifest signature
     reader.skip(manifest_sig_len as usize)?;
@@ -120,17 +123,13 @@ fn do_extract_boot_from_payload(
     for operation in operations.iter() {
         let data_len = operation
             .data_length
-            .ok_or(bad_payload!("data length not found"))? as usize;
+            .ok_or_else(|| bad_payload!("data length not found"))? as usize;
 
         let data_offset = operation
             .data_offset
-            .ok_or(bad_payload!("data offset not found"))?;
+            .ok_or_else(|| bad_payload!("data offset not found"))?;
 
-        let data_type = operation
-            .type_
-            .ok_or(bad_payload!("operation type not found"))?
-            .enum_value()
-            .map_err(|_| bad_payload!("operation type not valid"))?;
+        let data_type = operation.type_pb;
 
         buf.resize(data_len, 0u8);
         let data = &mut buf[..data_len];
@@ -144,9 +143,9 @@ fn do_extract_boot_from_payload(
         let out_offset = operation
             .dst_extents
             .get(0)
-            .ok_or(bad_payload!("dst extents not found"))?
+            .ok_or_else(|| bad_payload!("dst extents not found"))?
             .start_block
-            .ok_or(bad_payload!("start block not found"))?
+            .ok_or_else(|| bad_payload!("start block not found"))?
             * block_size;
 
         match data_type {
@@ -171,12 +170,7 @@ fn do_extract_boot_from_payload(
                     return Err(bad_payload!("decompression failed"));
                 }
             }
-            _ => {
-                return Err(bad_payload!(
-                    "unsupported operation type: {}",
-                    data_type.descriptor().name()
-                ));
-            }
+            _ => return Err(bad_payload!("unsupported operation type")),
         };
     }
 
@@ -192,7 +186,7 @@ pub fn extract_boot_from_payload(
         in_path: *const c_char,
         partition: *const c_char,
         out_path: *const c_char,
-    ) -> anyhow::Result<()> {
+    ) -> LoggedResult<()> {
         let in_path = unsafe { Utf8CStr::from_ptr(in_path) }?;
         let partition = match unsafe { Utf8CStr::from_ptr(partition) } {
             Ok(s) => Some(s),
@@ -205,8 +199,7 @@ pub fn extract_boot_from_payload(
             Err(e) => Err(e)?,
         };
         do_extract_boot_from_payload(in_path, partition, out_path)
-            .context("Failed to extract from payload")?;
-        Ok(())
+            .log_with_msg(|w| w.write_str("Failed to extract from payload"))
     }
-    inner(in_path, partition, out_path).log().is_ok()
+    inner(in_path, partition, out_path).is_ok()
 }

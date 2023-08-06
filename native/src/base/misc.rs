@@ -3,9 +3,11 @@ use std::ffi::{CStr, FromBytesWithNulError, OsStr};
 use std::fmt::{Arguments, Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
+use std::process::exit;
 use std::str::Utf8Error;
 use std::{fmt, io, mem, slice, str};
 
+use argh::EarlyExit;
 use libc::c_char;
 use thiserror::Error;
 
@@ -254,20 +256,8 @@ impl PartialEq<Utf8CStr> for str {
     }
 }
 
-pub fn ptr_to_str<'a, T>(ptr: *const T) -> &'a str {
-    if ptr.is_null() {
-        "(null)"
-    } else {
-        unsafe { CStr::from_ptr(ptr.cast()) }.to_str().unwrap_or("")
-    }
-}
-
 pub fn errno() -> &'static mut i32 {
     unsafe { &mut *libc::__errno() }
-}
-
-pub fn error_str() -> &'static str {
-    unsafe { ptr_to_str(libc::strerror(*errno())) }
 }
 
 // When len is 0, don't care whether buf is null or not
@@ -297,18 +287,18 @@ where
     fn as_raw_bytes(&self) -> &[u8] {
         unsafe {
             let self_ptr = self as *const Self as *const u8;
-            slice::from_raw_parts(self_ptr, std::mem::size_of::<Self>())
+            slice::from_raw_parts(self_ptr, mem::size_of::<Self>())
         }
     }
     fn as_raw_bytes_mut(&mut self) -> &mut [u8] {
         unsafe {
             let self_ptr = self as *mut Self as *mut u8;
-            slice::from_raw_parts_mut(self_ptr, std::mem::size_of::<Self>())
+            slice::from_raw_parts_mut(self_ptr, mem::size_of::<Self>())
         }
     }
 
     fn bytes_size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        mem::size_of::<Self>()
     }
 }
 
@@ -367,5 +357,37 @@ pub trait MutBytesExt {
 impl<T: AsMut<[u8]>> MutBytesExt for T {
     fn patch(&mut self, from: &[u8], to: &[u8]) -> Vec<usize> {
         ffi::mut_u8_patch(self.as_mut(), from, to)
+    }
+}
+
+// SAFETY: libc guarantees argc and argv are properly setup and are static
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn map_args(argc: i32, argv: *const *const c_char) -> Result<Vec<&'static str>, StrErr> {
+    unsafe { slice::from_raw_parts(argv, argc as usize) }
+        .iter()
+        .map(|s| unsafe { Utf8CStr::from_ptr(*s) }.map(|s| s.deref()))
+        .collect()
+}
+
+pub trait EarlyExitExt<T> {
+    fn on_early_exit<F: FnOnce()>(self, print_help_msg: F) -> T;
+}
+
+impl<T> EarlyExitExt<T> for Result<T, EarlyExit> {
+    fn on_early_exit<F: FnOnce()>(self, print_help_msg: F) -> T {
+        match self {
+            Ok(t) => t,
+            Err(EarlyExit { output, status }) => match status {
+                Ok(_) => {
+                    print_help_msg();
+                    exit(0)
+                }
+                Err(_) => {
+                    eprintln!("{}", output);
+                    print_help_msg();
+                    exit(1)
+                }
+            },
+        }
     }
 }

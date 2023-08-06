@@ -12,9 +12,9 @@ import com.topjohnwu.magisk.R
 import com.topjohnwu.magisk.core.Config
 import com.topjohnwu.magisk.core.Const
 import com.topjohnwu.magisk.core.Info
+import com.topjohnwu.magisk.core.di.ServiceLocator
 import com.topjohnwu.magisk.core.ktx.activity
 import com.topjohnwu.magisk.core.tasks.HideAPK
-import com.topjohnwu.magisk.core.utils.BiometricHelper
 import com.topjohnwu.magisk.core.utils.MediaStoreUtils
 import com.topjohnwu.magisk.core.utils.availableLocales
 import com.topjohnwu.magisk.core.utils.currentLocale
@@ -286,14 +286,16 @@ object Tapjack : BaseSettingsItem.Toggle() {
 object Biometrics : BaseSettingsItem.Toggle() {
     override val title = R.string.settings_su_biometric_title.asText()
     override var description = R.string.settings_su_biometric_summary.asText()
-    override var value by Config::suBiometric
+    override var value
+        get() = ServiceLocator.biometrics.isEnabled
+        set(value) {
+            Config.suBiometric = value
+        }
 
     override fun refresh() {
-        isEnabled = BiometricHelper.isSupported
+        isEnabled = ServiceLocator.biometrics.isSupported
         if (!isEnabled) {
-            value = false
             description = R.string.no_biometric.asText()
-            notifyPropertyChanged(BR.checked)
         }
     }
 }

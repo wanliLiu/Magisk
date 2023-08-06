@@ -20,13 +20,11 @@ import com.topjohnwu.magisk.core.isRunningAsStub
 import com.topjohnwu.magisk.core.ktx.copyAndClose
 import com.topjohnwu.magisk.core.ktx.reboot
 import com.topjohnwu.magisk.core.ktx.toast
-import com.topjohnwu.magisk.core.ktx.withStreams
 import com.topjohnwu.magisk.core.ktx.writeTo
 import com.topjohnwu.magisk.core.utils.MediaStoreUtils
 import com.topjohnwu.magisk.core.utils.MediaStoreUtils.inputStream
 import com.topjohnwu.magisk.core.utils.MediaStoreUtils.outputStream
 import com.topjohnwu.magisk.core.utils.RootUtils
-import com.topjohnwu.magisk.signing.SignBoot
 import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.ShellUtils
 import com.topjohnwu.superuser.internal.NOPList
@@ -220,6 +218,8 @@ abstract class MagiskInstallImpl protected constructor(
                 ByteBuffer.wrap(rawData).putInt(120, 3)
                 tarOut.putNextEntry(newTarEntry("vbmeta.img", rawData.size.toLong()))
                 tarOut.write(rawData)
+            } else if (entry.name.contains("userdata.img")) {
+                continue
             } else {
                 console.add("-- Copying: ${entry.name}")
                 tarOut.putNextEntry(entry)
@@ -230,32 +230,40 @@ abstract class MagiskInstallImpl protected constructor(
         val boot = installDir.getChildFile("boot.img")
         val initBoot = installDir.getChildFile("init_boot.img")
         val recovery = installDir.getChildFile("recovery.img")
-        if (Config.recovery && recovery.exists() && boot.exists()) {
-            // Repack boot image to prevent auto restore
-            arrayOf(
-                "cd $installDir",
-                "chmod -R 755 .",
-                "./magiskboot unpack boot.img",
-                "./magiskboot repack boot.img",
-                "cat new-boot.img > boot.img",
-                "./magiskboot cleanup",
-                "rm -f new-boot.img",
-                "cd /").sh()
-            boot.newInputStream().use {
-                tarOut.putNextEntry(newTarEntry("boot.img", boot.length()))
+
+        fun ExtendedFile.copyToTar() {
+            newInputStream().use {
+                tarOut.putNextEntry(newTarEntry(name, length()))
                 it.copyTo(tarOut)
             }
-            boot.delete()
-            // Install to recovery
-            return recovery
-        } else {
-            return when {
-                initBoot.exists() -> initBoot
-                boot.exists() -> boot
-                else -> {
-                    throw NoBootException()
+            delete()
+        }
+
+        // Patch priority: recovery > init_boot > boot
+        return when {
+            recovery.exists() -> {
+                if (boot.exists()) {
+                    // Repack boot image to prevent auto restore
+                    arrayOf(
+                        "cd $installDir",
+                        "chmod -R 755 .",
+                        "./magiskboot unpack boot.img",
+                        "./magiskboot repack boot.img",
+                        "cat new-boot.img > boot.img",
+                        "./magiskboot cleanup",
+                        "rm -f new-boot.img",
+                        "cd /").sh()
+                    boot.copyToTar()
                 }
+                recovery
             }
+            initBoot.exists() -> {
+                if (boot.exists())
+                    boot.copyToTar()
+                initBoot
+            }
+            boot.exists() -> boot
+            else -> throw NoBootException()
         }
     }
 
@@ -471,22 +479,6 @@ abstract class MagiskInstallImpl protected constructor(
     }
 
     private fun patchBoot(): Boolean {
-        var isSigned = false
-        if (!srcBoot.isCharacter) {
-            try {
-                srcBoot.newInputStream().use {
-                    if (SignBoot.verifySignature(it, null)) {
-                        isSigned = true
-                        console.add("- Boot image is signed with AVB 1.0")
-                    }
-                }
-            } catch (e: IOException) {
-                console.add("! Unable to check signature")
-                Timber.e(e)
-                return false
-            }
-        }
-
         val newBoot = installDir.getChildFile("new-boot.img")
         if (!useRootDir) {
             // Create output files before hand
@@ -502,30 +494,11 @@ abstract class MagiskInstallImpl protected constructor(
             "RECOVERYMODE=${Config.recovery} " +
             "SYSTEM_ROOT=${Info.isSAR} " +
             "sh boot_patch.sh $srcBoot")
+        val isSuccess = cmds.sh().isSuccess
 
-        if (!cmds.sh().isSuccess)
-            return false
+        shell.newJob().add("./magiskboot cleanup", "cd /").exec()
 
-        val job = shell.newJob().add("./magiskboot cleanup", "cd /")
-
-        if (isSigned) {
-            console.add("- Signing boot image with verity keys")
-            val signed = File.createTempFile("signed", ".img", context.cacheDir)
-            try {
-                val src = newBoot.newInputStream().buffered()
-                val out = signed.outputStream().buffered()
-                withStreams(src, out) { _, _ ->
-                    SignBoot.doSignature(null, null, src, out, "/boot")
-                }
-            } catch (e: IOException) {
-                console.add("! Unable to sign image")
-                Timber.e(e)
-                return false
-            }
-            job.add("cat $signed > $newBoot", "rm -f $signed")
-        }
-        job.exec()
-        return true
+        return isSuccess
     }
 
     private fun flashBoot() = "direct_install $installDir $srcBoot".sh().isSuccess

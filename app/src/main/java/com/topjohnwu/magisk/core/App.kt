@@ -5,9 +5,12 @@ import android.app.Application
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
+import androidx.profileinstaller.ProfileInstaller
+import com.topjohnwu.magisk.BuildConfig
 import com.topjohnwu.magisk.StubApk
 import com.topjohnwu.magisk.core.di.ServiceLocator
 import com.topjohnwu.magisk.core.utils.DispatcherExecutor
+import com.topjohnwu.magisk.core.utils.NetworkObserver
 import com.topjohnwu.magisk.core.utils.ProcessLifecycle
 import com.topjohnwu.magisk.core.utils.RootUtils
 import com.topjohnwu.magisk.core.utils.ShellInit
@@ -19,6 +22,8 @@ import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.internal.UiThreadHandler
 import com.topjohnwu.superuser.ipc.RootService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.lang.ref.WeakReference
 import kotlin.system.exitProcess
@@ -83,6 +88,12 @@ open class App() : Application() {
     override fun onCreate() {
         super.onCreate()
         ProcessLifecycle.init(this)
+        NetworkObserver.init(this)
+        if (!BuildConfig.DEBUG && !isRunningAsStub) {
+            GlobalScope.launch(Dispatchers.IO) {
+                ProfileInstaller.writeProfile(this@App)
+            }
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

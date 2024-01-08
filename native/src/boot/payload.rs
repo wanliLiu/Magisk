@@ -1,4 +1,3 @@
-use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -60,8 +59,7 @@ fn do_extract_boot_from_payload(
         return Err(bad_payload!("manifest signature length is zero"));
     }
 
-    let mut buf = Vec::new();
-    buf.resize(manifest_len, 0u8);
+    let mut buf = vec![0; manifest_len];
 
     let manifest = {
         let manifest = &mut buf[..manifest_len];

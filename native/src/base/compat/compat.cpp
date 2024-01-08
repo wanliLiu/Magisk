@@ -1,16 +1,20 @@
 // This file implements all missing symbols that should exist in normal API 23
 // libc.a but missing in our extremely lean libc.a replacements.
 
-#if !defined(__LP64__)
-
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
+#include <sys/xattr.h>
 
 extern "C" {
+
+#if !defined(__LP64__)
+
+// Add "hacky" libc.a missing symbols back
+// All symbols in this file are weak, so a vanilla NDK should still link properly
 
 #include "fortify.hpp"
 
@@ -87,6 +91,16 @@ int mkfifo(const char *path, mode_t mode) {
     return mknod(path, (mode & ~S_IFMT) | S_IFIFO, 0);
 }
 
+[[gnu::weak]]
+int fsetxattr(int fd, const char *name, const void *value, size_t size, int flags) {
+    return syscall(__NR_fsetxattr, fd, name, value, size, flags);
+}
+
+[[gnu::weak]]
+int lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags) {
+    return syscall(__NR_lsetxattr, path, name, value, size, flags);
+}
+
 #define SPLIT_64(v) (unsigned)((v) & 0xFFFFFFFF), (unsigned)((v) >> 32)
 
 #if defined(__arm__)
@@ -111,5 +125,20 @@ extern FILE __sF[];
 [[gnu::weak]] FILE* stdout = &__sF[1];
 [[gnu::weak]] FILE* stderr = &__sF[2];
 
+#endif // !defined(__LP64__)
+
+[[maybe_unused]]
+int __wrap_renameat(int old_dir_fd, const char *old_path, int new_dir_fd, const char *new_path) {
+    long out = syscall(__NR_renameat, old_dir_fd, old_path, new_dir_fd, new_path);
+    if (out == -1 && errno == ENOSYS) {
+        out = syscall(__NR_renameat2, old_dir_fd, old_path, new_dir_fd, new_path, 0);
+    }
+    return static_cast<int>(out);
+}
+
+[[maybe_unused]]
+int __wrap_rename(const char *old_path, const char *new_path) {
+    return __wrap_renameat(AT_FDCWD, old_path, AT_FDCWD, new_path);
+}
+
 } // extern "C"
-#endif

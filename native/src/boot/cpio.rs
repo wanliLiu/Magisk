@@ -1,16 +1,21 @@
+#![allow(clippy::useless_conversion)]
+
 use std::collections::BTreeMap;
-use std::ffi::CStr;
-use std::fmt::{Display, Formatter, Write as FmtWrite};
+use std::fmt::{Display, Formatter};
 use std::fs::{metadata, read, DirBuilder, File};
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::fs::{symlink, DirBuilderExt, FileTypeExt, MetadataExt};
 use std::path::Path;
 use std::process::exit;
+use std::str;
 
 use argh::FromArgs;
+use bytemuck::{from_bytes, Pod, Zeroable};
+use num_traits::cast::AsPrimitive;
 use size::{Base, Size, Style};
 
+use crate::ffi::{unxz, xz};
 use base::libc::{
     c_char, dev_t, gid_t, major, makedev, minor, mknod, mode_t, uid_t, S_IFBLK, S_IFCHR, S_IFDIR,
     S_IFLNK, S_IFMT, S_IFREG, S_IRGRP, S_IROTH, S_IRUSR, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP,
@@ -77,6 +82,8 @@ struct Exists {
 struct Backup {
     #[argh(positional, arg_name = "orig")]
     origin: String,
+    #[argh(switch, short = 'n')]
+    skip_compress: bool,
 }
 
 #[derive(FromArgs)]
@@ -173,14 +180,15 @@ Supported commands:
   patch
     Apply ramdisk patches
     Configure with env variables: KEEPVERITY KEEPFORCEENCRYPT
-  backup ORIG
-    Create ramdisk backups from ORIG
+  backup ORIG [-n]
+    Create ramdisk backups from ORIG, specify [-n] to skip compression
   restore
     Restore ramdisk from ramdisk backup stored within incpio
 "#
     )
 }
 
+#[derive(Copy, Clone, Pod, Zeroable)]
 #[repr(C, packed)]
 struct CpioHeader {
     magic: [u8; 6],
@@ -221,17 +229,17 @@ impl Cpio {
 
     fn load_from_data(data: &[u8]) -> LoggedResult<Self> {
         let mut cpio = Cpio::new();
-        let mut pos = 0usize;
+        let mut pos = 0_usize;
         while pos < data.len() {
-            let hdr = unsafe { &*(data.as_ptr().add(pos) as *const CpioHeader) };
+            let hdr_sz = size_of::<CpioHeader>();
+            let hdr = from_bytes::<CpioHeader>(&data[pos..(pos + hdr_sz)]);
             if &hdr.magic != b"070701" {
                 return Err(log_err!("invalid cpio magic"));
             }
-            pos += size_of::<CpioHeader>();
-            let name = CStr::from_bytes_until_nul(&data[pos..])?
-                .to_str()?
-                .to_string();
-            pos += x8u::<usize>(&hdr.namesize)?;
+            pos += hdr_sz;
+            let name_sz = x8u(&hdr.namesize)? as usize;
+            let name = Utf8CStr::from_bytes(&data[pos..(pos + name_sz)])?.to_string();
+            pos += name_sz;
             pos = align_4(pos);
             if name == "." || name == ".." {
                 continue;
@@ -243,16 +251,16 @@ impl Cpio {
                 }
                 continue;
             }
-            let file_size = x8u::<usize>(&hdr.filesize)?;
+            let file_sz = x8u(&hdr.filesize)? as usize;
             let entry = Box::new(CpioEntry {
-                mode: x8u(&hdr.mode)?,
-                uid: x8u(&hdr.uid)?,
-                gid: x8u(&hdr.gid)?,
-                rdevmajor: x8u(&hdr.rdevmajor)?,
-                rdevminor: x8u(&hdr.rdevminor)?,
-                data: data[pos..pos + file_size].to_vec(),
+                mode: x8u(&hdr.mode)?.as_(),
+                uid: x8u(&hdr.uid)?.as_(),
+                gid: x8u(&hdr.gid)?.as_(),
+                rdevmajor: x8u(&hdr.rdevmajor)?.as_(),
+                rdevminor: x8u(&hdr.rdevminor)?.as_(),
+                data: data[pos..(pos + file_sz)].to_vec(),
             });
-            pos += file_size;
+            pos += file_sz;
             cpio.entries.insert(name, entry);
             pos = align_4(pos);
         }
@@ -350,7 +358,7 @@ impl Cpio {
                 file.write_all(&entry.data)?;
             }
             S_IFLNK => {
-                symlink(Path::new(&std::str::from_utf8(entry.data.as_slice())?), out)?;
+                symlink(Path::new(&str::from_utf8(entry.data.as_slice())?), out)?;
             }
             S_IFBLK | S_IFCHR => {
                 let dev = makedev(entry.rdevmajor.try_into()?, entry.rdevminor.try_into()?);
@@ -490,6 +498,34 @@ impl Cpio {
     }
 }
 
+impl CpioEntry {
+    pub(crate) fn compress(&mut self) -> bool {
+        if self.mode & S_IFMT != S_IFREG {
+            return false;
+        }
+        let mut compressed = Vec::new();
+        if !xz(&self.data, &mut compressed) {
+            eprintln!("xz compression failed");
+            return false;
+        }
+        self.data = compressed;
+        true
+    }
+
+    pub(crate) fn decompress(&mut self) -> bool {
+        if self.mode & S_IFMT != S_IFREG {
+            return false;
+        }
+        let mut decompressed = Vec::new();
+        if !unxz(&self.data, &mut decompressed) {
+            eprintln!("xz decompression failed");
+            return false;
+        }
+        self.data = decompressed;
+        true
+    }
+}
+
 impl Display for CpioEntry {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -567,9 +603,10 @@ pub fn cpio_commands(argc: i32, argv: *const *const c_char) -> bool {
                         exit(1);
                     }
                 }
-                CpioSubCommand::Backup(Backup { origin }) => {
-                    cpio.backup(Utf8CStr::from_string(origin))?
-                }
+                CpioSubCommand::Backup(Backup {
+                    origin,
+                    skip_compress,
+                }) => cpio.backup(Utf8CStr::from_string(origin), *skip_compress)?,
                 CpioSubCommand::Remove(Remove { path, recursive }) => cpio.rm(path, *recursive),
                 CpioSubCommand::Move(Move { from, to }) => cpio.mv(from, to)?,
                 CpioSubCommand::MakeDir(MakeDir { mode, dir }) => cpio.mkdir(mode, dir),
@@ -598,15 +635,14 @@ pub fn cpio_commands(argc: i32, argv: *const *const c_char) -> bool {
         .is_ok()
 }
 
-fn x8u<U: TryFrom<u32>>(x: &[u8; 8]) -> LoggedResult<U> {
+fn x8u(x: &[u8; 8]) -> LoggedResult<u32> {
     // parse hex
     let mut ret = 0u32;
-    for i in x {
-        let c = *i as char;
-        let v = c.to_digit(16).ok_or_else(|| log_err!("bad cpio header"))?;
-        ret = ret * 16 + v;
+    let s = str::from_utf8(x).log_with_msg(|w| w.write_str("bad cpio header"))?;
+    for c in s.chars() {
+        ret = ret * 16 + c.to_digit(16).ok_or_else(|| log_err!("bad cpio header"))?;
     }
-    ret.try_into().map_err(|_| log_err!("bad cpio header"))
+    Ok(ret)
 }
 
 #[inline(always)]
@@ -616,8 +652,10 @@ fn align_4(x: usize) -> usize {
 
 #[inline(always)]
 fn norm_path(path: &str) -> String {
-    let path = path.strip_prefix('/').unwrap_or(path);
-    path.strip_suffix('/').unwrap_or(path).to_string()
+    path.split('/')
+        .filter(|x| !x.is_empty())
+        .intersperse("/")
+        .collect()
 }
 
 fn parse_mode(s: &str) -> Result<mode_t, String> {

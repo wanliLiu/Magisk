@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 
-#include <magisk.hpp>
+#include <consts.hpp>
 #include <base.hpp>
 #include <selinux.hpp>
 
@@ -165,8 +165,6 @@ void prune_su_access() {
 }
 
 static shared_ptr<su_info> get_su_info(unsigned uid) {
-    LOGD("su: request from uid=[%d]\n", uid);
-
     if (uid == AID_ROOT) {
         auto info = make_shared<su_info>(uid);
         info->access = SILENT_SU_ACCESS;
@@ -252,7 +250,7 @@ static void set_identity(uid_t uid, const std::vector<uid_t> &groups) {
 }
 
 void su_daemon_handler(int client, const sock_cred *cred) {
-    LOGD("su: request from pid=[%d], client=[%d]\n", cred->pid, client);
+    LOGD("su: request from uid=[%d], pid=[%d], client=[%d]\n", cred->uid, cred->pid, client);
 
     su_context ctx = {
         .info = get_su_info(cred->uid),
@@ -344,7 +342,7 @@ void su_daemon_handler(int client, const sock_cred *cred) {
     if (read_int(client)) {
         string pts;
         string ptmx;
-        auto magiskpts = MAGISKTMP + "/" SHELLPTS;
+        auto magiskpts = get_magisk_tmp() + "/"s SHELLPTS;
         if (access(magiskpts.data(), F_OK)) {
             pts = "/dev/pts";
             ptmx = "/dev/ptmx";
@@ -458,7 +456,7 @@ void su_daemon_handler(int client, const sock_cred *cred) {
     sigset_t block_set;
     sigemptyset(&block_set);
     sigprocmask(SIG_SETMASK, &block_set, nullptr);
-    if (!ctx.req.context.empty() && selinux_enabled()) {
+    if (!ctx.req.context.empty()) {
         auto f = xopen_file("/proc/self/attr/exec", "we");
         if (f) fprintf(f.get(), "%s", ctx.req.context.data());
     }

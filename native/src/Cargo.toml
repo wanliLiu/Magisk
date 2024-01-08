@@ -9,7 +9,7 @@ cxx-gen = { path = "external/cxx-rs/gen/lib" }
 libc = "0.2"
 cfg-if = "1.0"
 num-traits = "0.2"
-num-derive = "0.3"
+num-derive = "0.4"
 thiserror = "1.0"
 byteorder = "1"
 size = "0.4"
@@ -21,10 +21,13 @@ p384 = "0.13"
 rsa = "0.9"
 x509-cert = "0.2"
 der = "0.7"
+bytemuck = "1.14"
+fdt = "0.1"
 
 [workspace.dependencies.argh]
-git = "https://github.com/topjohnwu/argh.git"
-rev = "2fecd81d606364a8b07b942ed01697bbd3a62193"
+git = "https://github.com/google/argh.git"
+rev = "1c632b046d084e7bde86b82dfc969b30b4647c8c"
+default-features = false
 
 [workspace.dependencies.pb-rs]
 git = "https://github.com/tafia/quick-protobuf.git"

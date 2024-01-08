@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import errno
 import glob
 import lzma
 import multiprocessing
@@ -63,6 +62,8 @@ if shutil.which("sccache") is not None:
     os.environ["RUSTC_WRAPPER"] = "sccache"
     os.environ["NDK_CCACHE"] = "sccache"
     os.environ["CARGO_INCREMENTAL"] = "0"
+if shutil.which("ccache") is not None:
+    os.environ["NDK_CCACHE"] = "ccache"
 
 cpu_count = multiprocessing.cpu_count()
 os_name = platform.system().lower()
@@ -188,15 +189,17 @@ def load_config(args):
 
     # Default values
     config["version"] = commit_hash
+    config["versionCode"] = 1000000
     config["outdir"] = "out"
 
     # Load prop files
     if op.exists(args.config):
         config.update(parse_props(args.config))
 
-    for key, value in parse_props("gradle.properties").items():
-        if key.startswith("magisk."):
-            config[key[7:]] = value
+    if op.exists("gradle.properties"):
+        for key, value in parse_props("gradle.properties").items():
+            if key.startswith("magisk."):
+                config[key[7:]] = value
 
     try:
         config["versionCode"] = int(config["versionCode"])
@@ -243,7 +246,7 @@ def run_ndk_build(flags):
         error("Build binary failed!")
     os.chdir("..")
     for arch in archs:
-        for tgt in support_targets + ["libinit-ld.so", "libzygisk-ld.so"]:
+        for tgt in support_targets + ["libinit-ld.so"]:
             source = op.join("native", "libs", arch, tgt)
             target = op.join("native", "out", arch, tgt)
             mv(source, target)
@@ -253,14 +256,13 @@ def run_cargo(cmds, triple="aarch64-linux-android"):
     env = os.environ.copy()
     env["PATH"] = f'{rust_bin}{os.pathsep}{env["PATH"]}'
     env["CARGO_BUILD_RUSTC"] = op.join(rust_bin, "rustc" + EXE_EXT)
-    env["RUSTFLAGS"] = "-Clinker-plugin-lto"
+    env["RUSTFLAGS"] = f"-Clinker-plugin-lto -Zthreads={min(8, cpu_count)}"
     env["TARGET_CC"] = op.join(llvm_bin, "clang" + EXE_EXT)
     env["TARGET_CFLAGS"] = f"--target={triple}23"
     return execv([cargo, *cmds], env)
 
 
 def run_cargo_build(args):
-    os.chdir(op.join("native", "src"))
     native_out = op.join("..", "out")
     mkdir(native_out)
 
@@ -268,11 +270,11 @@ def run_cargo_build(args):
     if "resetprop" in args.target:
         targets.add("magisk")
 
+    if len(targets) == 0:
+        return
+
     # Start building the actual build commands
-    cmds = ["build"]
-    for target in targets:
-        cmds.append("-p")
-        cmds.append(target)
+    cmds = ["build", "-p", ""]
     rust_out = "debug"
     if args.release:
         cmds.append("-r")
@@ -288,9 +290,12 @@ def run_cargo_build(args):
             "thumbv7neon-linux-androideabi" if triple.startswith("armv7") else triple
         )
         cmds[-1] = rust_triple
-        proc = run_cargo(cmds, triple)
-        if proc.returncode != 0:
-            error("Build binary failed!")
+
+        for target in targets:
+            cmds[2] = target
+            proc = run_cargo(cmds, triple)
+            if proc.returncode != 0:
+                error("Build binary failed!")
 
         arch_out = op.join(native_out, arch)
         mkdir(arch_out)
@@ -298,8 +303,6 @@ def run_cargo_build(args):
             source = op.join("target", rust_triple, rust_out, f"lib{tgt}.a")
             target = op.join(arch_out, f"lib{tgt}-rs.a")
             mv(source, target)
-
-    os.chdir(op.join("..", ".."))
 
 
 def run_cargo_cmd(args):
@@ -339,9 +342,6 @@ def dump_bin_header(args):
         preload = op.join("native", "out", arch, "libinit-ld.so")
         with open(preload, "rb") as src:
             text = binary_dump(src, "init_ld_xz")
-        preload = op.join("native", "out", arch, "libzygisk-ld.so")
-        with open(preload, "rb") as src:
-            text += binary_dump(src, "zygisk_ld", compressor=lambda x: x)
         write_if_diff(op.join(native_gen_path, f"{arch}_binaries.h"), text)
 
 
@@ -383,17 +383,22 @@ def build_binary(args):
 
     header("* Building binaries: " + " ".join(args.target))
 
+    os.chdir(op.join("native", "src"))
     run_cargo_build(args)
+    os.chdir(op.join("..", ".."))
 
     dump_flag_header()
 
     flag = ""
+    clean = False
 
-    if "magisk" in args.target or "magiskinit" in args.target:
-        flag += " B_PRELOAD=1"
+    if "magisk" in args.target:
+        flag += " B_MAGISK=1"
+        clean = True
 
     if "magiskpolicy" in args.target:
         flag += " B_POLICY=1"
+        clean = True
 
     if "test" in args.target:
         flag += " B_TEST=1"
@@ -410,12 +415,9 @@ def build_binary(args):
     if flag:
         run_ndk_build(flag)
 
-    # magiskinit and magisk embeds preload.so
+    # magiskinit embeds preload.so
 
     flag = ""
-
-    if "magisk" in args.target:
-        flag += " B_MAGISK=1"
 
     if "magiskinit" in args.target:
         flag += " B_INIT=1"
@@ -423,6 +425,8 @@ def build_binary(args):
     if flag:
         dump_bin_header(args)
         run_ndk_build(flag)
+
+    if clean:
         clean_elf()
 
     # BusyBox is built with different libc

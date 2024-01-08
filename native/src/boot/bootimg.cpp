@@ -1,7 +1,7 @@
+#include <bit>
 #include <functional>
 #include <memory>
 
-#include <libfdt.h>
 #include <base.hpp>
 
 #include "boot-rs.hpp"
@@ -116,7 +116,7 @@ void dyn_img_hdr::dump_hdr_file() const {
 }
 
 void dyn_img_hdr::load_hdr_file() {
-    parse_prop_file(HEADER_FILE, [=](string_view key, string_view value) -> bool {
+    parse_prop_file(HEADER_FILE, [=, this](string_view key, string_view value) -> bool {
         if (key == "name" && name()) {
             memset(name(), 0, 16);
             memcpy(name(), value.data(), value.length() > 15 ? 15 : value.length());
@@ -183,29 +183,70 @@ boot_img::~boot_img() {
     delete hdr;
 }
 
+struct [[gnu::packed]] fdt_header {
+    struct fdt32_t {
+        uint32_t byte0: 8;
+        uint32_t byte1: 8;
+        uint32_t byte2: 8;
+        uint32_t byte3: 8;
+
+        constexpr operator uint32_t() const {
+            return bit_cast<uint32_t>(fdt32_t {
+                .byte0 = byte3,
+                .byte1 = byte2,
+                .byte2 = byte1,
+                .byte3 = byte0
+            });
+        }
+    };
+
+    struct node_header {
+        fdt32_t tag;
+        char name[0];
+    };
+
+    fdt32_t magic;			 /* magic word FDT_MAGIC */
+    fdt32_t totalsize;		 /* total size of DT block */
+    fdt32_t off_dt_struct;		 /* offset to structure */
+    fdt32_t off_dt_strings;		 /* offset to strings */
+    fdt32_t off_mem_rsvmap;		 /* offset to memory reserve map */
+    fdt32_t version;		 /* format version */
+    fdt32_t last_comp_version;	 /* last compatible version */
+
+    /* version 2 fields below */
+    fdt32_t boot_cpuid_phys;	 /* Which physical CPU id we're
+					    booting on */
+    /* version 3 fields below */
+    fdt32_t size_dt_strings;	 /* size of the strings block */
+
+    /* version 17 fields below */
+    fdt32_t size_dt_struct;		 /* size of the structure block */
+};
+
+
 static int find_dtb_offset(const uint8_t *buf, unsigned sz) {
     const uint8_t * const end = buf + sz;
 
     for (auto curr = buf; curr < end; curr += sizeof(fdt_header)) {
-        curr = static_cast<uint8_t*>(memmem(curr, end - curr, DTB_MAGIC, sizeof(fdt32_t)));
+        curr = static_cast<uint8_t*>(memmem(curr, end - curr, DTB_MAGIC, sizeof(fdt_header::fdt32_t)));
         if (curr == nullptr)
             return -1;
 
         auto fdt_hdr = reinterpret_cast<const fdt_header *>(curr);
 
         // Check that fdt_header.totalsize does not overflow kernel image size
-        uint32_t totalsize = fdt32_to_cpu(fdt_hdr->totalsize);
+        uint32_t totalsize = fdt_hdr->totalsize;
         if (totalsize > end - curr)
             continue;
 
         // Check that fdt_header.off_dt_struct does not overflow kernel image size
-        uint32_t off_dt_struct = fdt32_to_cpu(fdt_hdr->off_dt_struct);
+        uint32_t off_dt_struct = fdt_hdr->off_dt_struct;
         if (off_dt_struct > end - curr)
             continue;
 
         // Check that fdt_node_header.tag of first node is FDT_BEGIN_NODE
-        auto fdt_node_hdr = reinterpret_cast<const fdt_node_header *>(curr + off_dt_struct);
-        if (fdt32_to_cpu(fdt_node_hdr->tag) != FDT_BEGIN_NODE)
+        auto fdt_node_hdr = reinterpret_cast<const fdt_header::node_header *>(curr + off_dt_struct);
+        if (fdt_node_hdr->tag != 0x1u)
             continue;
 
         return curr - buf;
@@ -876,8 +917,10 @@ int sign(const char *image, const char *name, const char *cert, const char *key)
         close(fd);
         return 1;
     }
-    // Wipe out rest of tail
-    write_zero(fd, boot.map.sz() - lseek(fd, 0, SEEK_CUR));
+    if (auto off = lseek(fd, 0, SEEK_CUR); off < boot.map.sz()) {
+        // Wipe out rest of tail
+        write_zero(fd, boot.map.sz() - off);
+    }
     close(fd);
     return 0;
 }

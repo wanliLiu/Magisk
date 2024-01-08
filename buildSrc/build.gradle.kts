@@ -16,10 +16,9 @@ gradlePlugin {
 }
 
 dependencies {
-    // Cannot upgrade to 1.9.0: https://issuetracker.google.com/issues/236612358#comment19
-    implementation(kotlin("gradle-plugin", "1.8.22"))
-    implementation("com.android.tools.build:gradle:8.0.2")
-    implementation("androidx.navigation:navigation-safe-args-gradle-plugin:2.6.0")
+    implementation(embeddedKotlin("gradle-plugin"))
+    implementation("com.android.tools.build:gradle:8.2.0")
+    implementation("androidx.navigation:navigation-safe-args-gradle-plugin:2.7.5")
     implementation("org.lsposed.lsparanoid:gradle-plugin:0.5.2")
-    implementation("org.eclipse.jgit:org.eclipse.jgit:6.5.0.202303070854-r")
+    implementation("org.eclipse.jgit:org.eclipse.jgit:6.7.0.202309050840-r")
 }

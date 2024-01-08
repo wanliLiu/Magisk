@@ -181,8 +181,10 @@ abstract class MagiskInstallImpl protected constructor(
         return TarEntry(TarHeader.createHeader(name, size, 0, false, 420 /* 0644 */))
     }
 
-    private class LZ4InputStream(s: InputStream) : LZ4FrameInputStream(s) {
-        // Workaround bug in LZ4FrameInputStream
+    private class NoAvailableStream(s: InputStream) : FilterInputStream(s) {
+        // Make sure available is never called on the actual stream and always return 0
+        // 1. Workaround bug in LZ4FrameInputStream
+        // 2. Reduce max buffer size to prevent OOM
         override fun available() = 0
     }
 
@@ -194,7 +196,8 @@ abstract class MagiskInstallImpl protected constructor(
         lateinit var entry: TarEntry
 
         fun decompressedStream(): InputStream {
-            return if (entry.name.endsWith(".lz4")) LZ4InputStream(tarIn) else tarIn
+            val stream = if (entry.name.endsWith(".lz4")) LZ4FrameInputStream(tarIn) else tarIn
+            return NoAvailableStream(stream)
         }
 
         while (tarIn.nextEntry?.let { entry = it } != null) {
@@ -218,6 +221,8 @@ abstract class MagiskInstallImpl protected constructor(
                 ByteBuffer.wrap(rawData).putInt(120, 3)
                 tarOut.putNextEntry(newTarEntry("vbmeta.img", rawData.size.toLong()))
                 tarOut.write(rawData)
+                // vbmeta partition exist, disable boot vbmeta patch
+                Info.patchBootVbmeta = false
             } else if (entry.name.contains("userdata.img")) {
                 continue
             } else {
@@ -320,7 +325,8 @@ abstract class MagiskInstallImpl protected constructor(
 
             val fd = Os.open(fifo.path, O_WRONLY, 0)
             try {
-                val buf = ByteBuffer.allocate(1024 * 1024)
+                val bufSize = 1024 * 1024
+                val buf = ByteBuffer.allocate(bufSize)
                 buf.position(input.read(buf.array()).coerceAtLeast(0)).flip()
                 while (buf.hasRemaining()) {
                     try {
@@ -332,6 +338,7 @@ abstract class MagiskInstallImpl protected constructor(
                         break
                     }
                     if (!buf.hasRemaining()) {
+                        buf.limit(bufSize)
                         buf.position(input.read(buf.array()).coerceAtLeast(0)).flip()
                     }
                 }
@@ -490,9 +497,9 @@ abstract class MagiskInstallImpl protected constructor(
             "cd $installDir",
             "KEEPFORCEENCRYPT=${Config.keepEnc} " +
             "KEEPVERITY=${Config.keepVerity} " +
-            "PATCHVBMETAFLAG=${Config.patchVbmeta} " +
+            "PATCHVBMETAFLAG=${Info.patchBootVbmeta} " +
             "RECOVERYMODE=${Config.recovery} " +
-            "SYSTEM_ROOT=${Info.isSAR} " +
+            "LEGACYSAR=${Info.legacySAR} " +
             "sh boot_patch.sh $srcBoot")
         val isSuccess = cmds.sh().isSuccess
 

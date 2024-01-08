@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::env;
 use std::str::from_utf8;
 
 use base::libc::{S_IFDIR, S_IFMT, S_IFREG};
 use base::{LoggedResult, Utf8CStr};
 
+use crate::check_env;
 use crate::cpio::{Cpio, CpioEntry};
 use crate::patch::{patch_encryption, patch_verity};
 
@@ -13,17 +13,12 @@ pub trait MagiskCpio {
     fn patch(&mut self);
     fn test(&self) -> i32;
     fn restore(&mut self) -> LoggedResult<()>;
-    fn backup(&mut self, origin: &Utf8CStr) -> LoggedResult<()>;
+    fn backup(&mut self, origin: &Utf8CStr, skip_compress: bool) -> LoggedResult<()>;
 }
 
 const MAGISK_PATCHED: i32 = 1 << 0;
 const UNSUPPORTED_CPIO: i32 = 1 << 1;
 const SONY_INIT: i32 = 1 << 2;
-
-#[inline(always)]
-fn check_env(env: &str) -> bool {
-    env::var(env).map_or(false, |var| var == "true")
-}
 
 impl MagiskCpio for Cpio {
     fn patch(&mut self) {
@@ -93,14 +88,18 @@ impl MagiskCpio for Cpio {
         let mut backups = HashMap::<String, Box<CpioEntry>>::new();
         let mut rm_list = String::new();
         self.entries
-            .drain_filter(|name, _| name.starts_with(".backup/"))
-            .for_each(|(name, entry)| {
+            .extract_if(|name, _| name.starts_with(".backup/"))
+            .for_each(|(name, mut entry)| {
                 if name == ".backup/.rmlist" {
                     if let Ok(data) = from_utf8(&entry.data) {
                         rm_list.push_str(data);
                     }
                 } else if name != ".backup/.magisk" {
-                    let new_name = &name[8..];
+                    let new_name = if name.ends_with(".xz") && entry.decompress() {
+                        &name[8..name.len() - 3]
+                    } else {
+                        &name[8..]
+                    };
                     eprintln!("Restore [{}] -> [{}]", name, new_name);
                     backups.insert(new_name.to_string(), entry);
                 }
@@ -120,7 +119,7 @@ impl MagiskCpio for Cpio {
         Ok(())
     }
 
-    fn backup(&mut self, origin: &Utf8CStr) -> LoggedResult<()> {
+    fn backup(&mut self, origin: &Utf8CStr, skip_compress: bool) -> LoggedResult<()> {
         let mut backups = HashMap::<String, Box<CpioEntry>>::new();
         let mut rm_list = String::new();
         backups.insert(
@@ -175,8 +174,12 @@ impl MagiskCpio for Cpio {
                 }
             };
             match action {
-                Action::Backup(name, entry) => {
-                    let backup = format!(".backup/{}", name);
+                Action::Backup(name, mut entry) => {
+                    let backup = if !skip_compress && entry.compress() {
+                        format!(".backup/{}.xz", name)
+                    } else {
+                        format!(".backup/{}", name)
+                    };
                     eprintln!("Backup [{}] -> [{}]", name, backup);
                     backups.insert(backup, entry);
                 }

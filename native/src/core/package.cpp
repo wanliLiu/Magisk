@@ -1,10 +1,8 @@
 #include <base.hpp>
-#include <magisk.hpp>
-#include <daemon.hpp>
+#include <consts.hpp>
+#include <core.hpp>
 #include <db.hpp>
 #include <flags.h>
-
-#include "core.hpp"
 
 using namespace std;
 using rust::Vec;
@@ -73,7 +71,7 @@ vector<bool> get_app_no_list() {
 
 void preserve_stub_apk() {
     mutex_guard g(pkg_lock);
-    string stub_path = MAGISKTMP + "/stub.apk";
+    string stub_path = get_magisk_tmp() + "/stub.apk"s;
     stub_apk_fd = xopen(stub_path.data(), O_RDONLY | O_CLOEXEC);
     unlink(stub_path.data());
     auto cert = read_certificate(stub_apk_fd, -1);
@@ -178,7 +176,7 @@ int get_manager(int user_id, string *pkg, bool install) {
                     int app_id = to_app_id(st.st_uid);
 
                     byte_array<PATH_MAX> apk;
-                    find_apk_path(byte_view(str[SU_MANAGER]), apk);
+                    find_apk_path(str[SU_MANAGER], apk);
                     int fd = xopen((const char *) apk.buf(), O_RDONLY | O_CLOEXEC);
                     auto cert = read_certificate(fd, -1);
                     close(fd);
@@ -232,7 +230,7 @@ int get_manager(int user_id, string *pkg, bool install) {
             if (stat(app_path, &st) == 0) {
 #if ENFORCE_SIGNATURE
                 byte_array<PATH_MAX> apk;
-                find_apk_path(byte_view(JAVA_PACKAGE_NAME), apk);
+                find_apk_path(JAVA_PACKAGE_NAME, apk);
                 int fd = xopen((const char *) apk.buf(), O_RDONLY | O_CLOEXEC);
                 auto cert = read_certificate(fd, MAGISK_VER_CODE);
                 close(fd);

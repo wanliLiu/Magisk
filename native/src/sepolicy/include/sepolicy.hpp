@@ -3,7 +3,22 @@
 #include <stdlib.h>
 #include <string>
 
-#include <selinux.hpp>
+#include <base.hpp>
+
+// sepolicy paths
+#define PLAT_POLICY_DIR     "/system/etc/selinux/"
+#define VEND_POLICY_DIR     "/vendor/etc/selinux/"
+#define PROD_POLICY_DIR     "/product/etc/selinux/"
+#define ODM_POLICY_DIR      "/odm/etc/selinux/"
+#define SYSEXT_POLICY_DIR   "/system_ext/etc/selinux/"
+#define SPLIT_PLAT_CIL      PLAT_POLICY_DIR "plat_sepolicy.cil"
+
+// selinuxfs paths
+#define SELINUX_MNT         "/sys/fs/selinux"
+#define SELINUX_ENFORCE     SELINUX_MNT "/enforce"
+#define SELINUX_POLICY      SELINUX_MNT "/policy"
+#define SELINUX_LOAD        SELINUX_MNT "/load"
+#define SELINUX_VERSION     SELINUX_MNT "/policyvers"
 
 using token_list = std::vector<const char *>;
 using argument = std::pair<token_list, bool>;
@@ -25,8 +40,7 @@ struct sepolicy {
 
     // External APIs
     bool to_file(c_str file);
-    void parse_statement(c_str stmt, int len);
-    void parse_statement(c_str stmt) { parse_statement(stmt, strlen(stmt)); }
+    void parse_statement(rust::Str stmt);
     void load_rules(const std::string &rules);
     void load_rule_file(c_str file);
     void print_rules();

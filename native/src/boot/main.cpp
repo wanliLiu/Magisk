@@ -45,6 +45,20 @@ Supported actions:
     If env variable PATCHVBMETAFLAG is set to true, all disable flags in
     the boot image's vbmeta header will be set.
 
+  verify <bootimg> [x509.pem]
+    Check whether the boot image is signed with AVB 1.0 signature.
+    Optionally provide a certificate to verify whether the image is
+    signed by the public key certificate.
+    Return value:
+    0:valid    1:error
+
+  sign <bootimg> [name] [x509.pem pk8]
+    Sign <bootimg> with AVB 1.0 signature.
+    Optionally provide the name of the image (default: '/boot').
+    Optionally provide the certificate/private key pair for signing.
+    If the certificate/private key pair is not provided, the AOSP
+    verity key bundled in the executable will be used.
+
   extract <payload.bin> [partition] [outfile]
     Extract [partition] from <payload.bin> to [outfile].
     If [outfile] is not specified, then output to '[partition].img'.
@@ -57,24 +71,13 @@ Supported actions:
     Search <hexpattern1> in <file>, and replace it with <hexpattern2>
 
   cpio <incpio> [commands...]
-    Do cpio commands to <incpio> (modifications are done in-place)
-    Each command is a single argument, add quotes for each command.
-    See "cpio <incpio> --help" for supported commands.
+    Do cpio commands to <incpio> (modifications are done in-place).
+    Each command is a single argument; add quotes for each command.
+    See "cpio --help" for supported commands.
 
   dtb <file> <action> [args...]
-    Do dtb related actions to <file>
-    Supported actions:
-      print [-f]
-        Print all contents of dtb for debugging
-        Specify [-f] to only print fstab nodes
-      patch
-        Search for fstab and remove verity/avb
-        Modifications are done directly to the file in-place
-        Configure with env variables: KEEPVERITY
-      test
-        Test the fstab's status
-        Return values:
-        0:valid    1:error
+    Do dtb related actions to <file>.
+    See "dtb --help" for supported actions.
 
   split <file>
     Split image.*-dtb into kernel + kernel_dtb
@@ -171,18 +174,25 @@ int main(int argc, char *argv[]) {
         } else {
             repack(argv[2], argv[3] ? argv[3] : NEW_BOOT);
         }
+    } else if (argc > 2 && action == "verify") {
+        return verify(argv[2], argv[3]);
+    } else if (argc > 2 && action == "sign") {
+        if (argc == 5) usage(argv[0]);
+        return sign(
+                argv[2],
+                argc > 3 ? argv[3] : "/boot",
+                argc > 5 ? argv[4] : nullptr,
+                argc > 5 ? argv[5] : nullptr);
     } else if (argc > 2 && action == "decompress") {
         decompress(argv[2], argv[3]);
     } else if (argc > 2 && str_starts(action, "compress")) {
         compress(action[8] == '=' ? &action[9] : "gzip", argv[2], argv[3]);
     } else if (argc > 4 && action == "hexpatch") {
         return hexpatch(byte_view(argv[2]), byte_view(argv[3]), byte_view(argv[4])) ? 0 : 1;
-    } else if (argc > 2 && action == "cpio"sv) {
-        if (!rust::cpio_commands(argc - 2, argv + 2))
-            usage(argv[0]);
-    } else if (argc > 3 && action == "dtb") {
-        if (dtb_commands(argc - 2, argv + 2))
-            usage(argv[0]);
+    } else if (argc > 2 && action == "cpio") {
+        return rust::cpio_commands(argc - 2, argv + 2) ? 0 : 1;
+    } else if (argc > 2 && action == "dtb") {
+        return rust::dtb_commands(argc - 2, argv + 2) ? 0 : 1;
     } else if (argc > 2 && action == "extract") {
         return rust::extract_boot_from_payload(
                 argv[2],

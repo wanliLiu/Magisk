@@ -88,6 +88,9 @@
     <string name="logs_cleared">Protokol byl smazán</string>
     <string name="pid">PID:%1$d</string>
     <string name="target_uid">Cílové UID: %1$d</string>
+    <string name="target_pid">Připojit PID cílového ns: %s</string>
+    <string name="selinux_context">SELinux kontext: %s</string>
+    <string name="supp_group">Sekundární skupina: %s</string>
 
     <!--SafetyNet-->
 
@@ -167,9 +170,6 @@
     <string name="settings_su_reauth_summary">Opětovné ověření oprávnění SuperUser po aktualizaci aplikace.</string>
     <string name="settings_su_tapjack_title">Povolit ochranu před TapJack</string>
     <string name="settings_su_tapjack_summary">Okno dialogu SuperUser nebude reagovat na kliknutí v případě, že je zavřené nebo překryté jiným oknem</string>
-    <string name="settings_su_biometric_title">Povolit biometrické ověření</string>
-    <string name="settings_su_biometric_summary">Použije biometrické ověření pro povolení požadavků SuperUser</string>
-    <string name="no_biometric">Nepodporované zařízení, nebo není povolené biometrické ověření</string>
     <string name="settings_customization">Přizpůsobit</string>
     <string name="setting_add_shortcut_summary">Přidá odkaz na domovskou obrazovku v případě, že se po skrytí aplikace její název a ikona těžko rozpoznávají.</string>
     <string name="settings_doh_title">DNS přes HTTPS</string>
@@ -179,9 +179,9 @@
     <string name="settings_owner_only">Vlastník zařízení</string>
     <string name="settings_owner_manage">Správce zařízení</string>
     <string name="settings_user_independent">Všichni uživatelé</string>
-    <string name="owner_only_summary">Pouze vlastník má přístup ROOT.</string>
-    <string name="owner_manage_summary">Přístup ROOT má správce zařízení, který přijímá požadavky k přístupu.</string>
-    <string name="user_independent_summary">Každý uživatel má svá vlastní pravidla přístupu ROOT.</string>
+    <string name="owner_only_summary">Pouze vlastník má přístup ROOT</string>
+    <string name="owner_manage_summary">Přístup ROOT má správce zařízení, který přijímá požadavky k přístupu</string>
+    <string name="user_independent_summary">Každý uživatel má svá vlastní pravidla přístupu ROOT</string>
 
     <string name="mount_namespace_mode">Režim připojení jmenného prostoru</string>
     <string name="settings_ns_global">Globální jmenný prostor</string>

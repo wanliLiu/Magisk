@@ -10,9 +10,7 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := magisk
 LOCAL_STATIC_LIBRARIES := \
     libbase \
-    libnanopb \
     libsystemproperties \
-    libphmap \
     liblsplt \
     libmagisk-rs
 
@@ -25,24 +23,22 @@ LOCAL_SRC_FILES := \
     core/db.cpp \
     core/package.cpp \
     core/scripting.cpp \
-    core/restorecon.cpp \
+    core/selinux.cpp \
     core/module.cpp \
     core/thread.cpp \
-    core/resetprop/persist.cpp \
-    core/resetprop/resetprop.cpp \
     core/core-rs.cpp \
+    core/resetprop/resetprop.cpp \
     core/su/su.cpp \
     core/su/connect.cpp \
     core/su/pts.cpp \
     core/su/su_daemon.cpp \
-    zygisk/entry.cpp \
-    zygisk/main.cpp \
-    zygisk/utils.cpp \
-    zygisk/hook.cpp \
-    zygisk/memory.cpp \
-    zygisk/deny/cli.cpp \
-    zygisk/deny/utils.cpp \
-    zygisk/deny/revert.cpp
+    core/zygisk/entry.cpp \
+    core/zygisk/main.cpp \
+    core/zygisk/module.cpp \
+    core/zygisk/hook.cpp \
+    core/deny/cli.cpp \
+    core/deny/utils.cpp \
+    core/deny/revert.cpp
 
 LOCAL_LDLIBS := -llog
 LOCAL_LDFLAGS := -Wl,--dynamic-list=src/exported_sym.txt
@@ -56,12 +52,6 @@ ifdef B_PRELOAD
 include $(CLEAR_VARS)
 LOCAL_MODULE := init-ld
 LOCAL_SRC_FILES := init/preload.c
-LOCAL_STRIP_MODE := --strip-all
-include $(BUILD_SHARED_LIBRARY)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := zygisk-ld
-LOCAL_SRC_FILES := zygisk/loader.c
 LOCAL_STRIP_MODE := --strip-all
 include $(BUILD_SHARED_LIBRARY)
 
@@ -101,7 +91,6 @@ LOCAL_STATIC_LIBRARIES := \
     liblzma \
     liblz4 \
     libbz2 \
-    libfdt \
     libz \
     libzopfli \
     libboot-rs
@@ -111,7 +100,6 @@ LOCAL_SRC_FILES := \
     boot/bootimg.cpp \
     boot/compress.cpp \
     boot/format.cpp \
-    boot/dtb.cpp \
     boot/boot-rs.cpp
 
 include $(BUILD_EXECUTABLE)
@@ -139,14 +127,13 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := resetprop
 LOCAL_STATIC_LIBRARIES := \
     libbase \
-    libnanopb \
     libsystemproperties \
     libmagisk-rs
 
 LOCAL_SRC_FILES := \
     core/applet_stub.cpp \
     core/resetprop/resetprop.cpp \
-    core/resetprop/persist.cpp
+    core/core-rs.cpp
 
 LOCAL_CFLAGS := -DAPPLET_STUB_MAIN=resetprop_main
 include $(BUILD_EXECUTABLE)

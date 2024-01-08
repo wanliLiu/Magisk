@@ -1,14 +1,13 @@
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{IoSlice, Write};
 use std::sync::OnceLock;
 
-use base::ffi::LogLevel;
 use base::libc::{
     close, makedev, mknod, open, syscall, unlink, SYS_dup3, O_CLOEXEC, O_RDWR, STDERR_FILENO,
     STDIN_FILENO, STDOUT_FILENO, S_IFCHR,
 };
-use base::*;
+use base::{cstr, exit_on_error, raw_cstr, LogLevel, Logger, Utf8CStr, LOGGER};
 
 static KMSG: OnceLock<File> = OnceLock::new();
 
@@ -17,7 +16,7 @@ pub fn setup_klog() {
     unsafe {
         let mut fd = open(raw_cstr!("/dev/null"), O_RDWR | O_CLOEXEC);
         if fd < 0 {
-            mknod(raw_cstr!("/null"), S_IFCHR | 0666, makedev(1, 3));
+            mknod(raw_cstr!("/null"), S_IFCHR | 0o666, makedev(1, 3));
             fd = open(raw_cstr!("/null"), O_RDWR | O_CLOEXEC);
             fs::remove_file("/null").ok();
         }
@@ -34,7 +33,7 @@ pub fn setup_klog() {
         KMSG.set(kmsg).ok();
     } else {
         unsafe {
-            mknod(raw_cstr!("/kmsg"), S_IFCHR | 0666, makedev(1, 11));
+            mknod(raw_cstr!("/kmsg"), S_IFCHR | 0o666, makedev(1, 11));
             KMSG.set(File::options().write(true).open("/kmsg").unwrap())
                 .ok();
             unlink(raw_cstr!("/kmsg"));
@@ -49,17 +48,16 @@ pub fn setup_klog() {
         writeln!(rate, "on").ok();
     }
 
-    fn klog_write_impl(_: LogLevel, msg: &[u8]) {
+    fn kmsg_log_write(_: LogLevel, msg: &Utf8CStr) {
         if let Some(kmsg) = KMSG.get().as_mut() {
-            let mut buf: [u8; 4096] = [0; 4096];
-            let mut len = copy_str(&mut buf, b"magiskinit: ");
-            len += copy_str(&mut buf[len..], msg);
-            kmsg.write_all(&buf[..len]).ok();
+            let io1 = IoSlice::new("magiskinit: ".as_bytes());
+            let io2 = IoSlice::new(msg.as_bytes());
+            kmsg.write_vectored(&[io1, io2]).ok();
         }
     }
 
     let logger = Logger {
-        write: klog_write_impl,
+        write: kmsg_log_write,
         flags: 0,
     };
     exit_on_error(false);

@@ -1,4 +1,3 @@
-use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -60,8 +59,7 @@ fn do_extract_boot_from_payload(
         return Err(bad_payload!("manifest signature length is zero"));
     }
 
-    let mut buf = Vec::new();
-    buf.resize(manifest_len, 0u8);
+    let mut buf = vec![0; manifest_len];
 
     let manifest = {
         let manifest = &mut buf[..manifest_len];
@@ -157,9 +155,11 @@ fn do_extract_boot_from_payload(
                 for ext in operation.dst_extents.iter() {
                     let out_seek = ext
                         .start_block
-                        .ok_or(bad_payload!("start block not found"))?
+                        .ok_or_else(|| bad_payload!("start block not found"))?
                         * block_size;
-                    let num_blocks = ext.num_blocks.ok_or(bad_payload!("num blocks not found"))?;
+                    let num_blocks = ext
+                        .num_blocks
+                        .ok_or_else(|| bad_payload!("num blocks not found"))?;
                     out_file.seek(SeekFrom::Start(out_seek))?;
                     out_file.write_zeros(num_blocks as usize)?;
                 }
